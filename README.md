@@ -75,7 +75,7 @@ Rather than always streaming audio to Home Assistant, the satellite can wait unt
 Install the dependencies for silero VAD:
 
 ``` sh
-.venv/bin/pip3 install 'pysilero-vad==1.0.0'
+.venv/bin/pip3 install 'pysilero-vad==2.0.1'
 ```
 
 Run the satellite with VAD enabled:

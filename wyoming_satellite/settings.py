@@ -47,7 +47,7 @@ class MicSettings(ServiceSettings):
     channels: int = 1
     """Sample channels in mic audio"""
 
-    samples_per_chunk: int = 1024
+    samples_per_chunk: int = 512
     """Samples to read at a time from mic command"""
 
     mute_during_awake_wav: bool = True

@@ -1,6 +1,8 @@
 """Voice activity detection."""
 from typing import Optional
+import logging
 
+_LOGGER = logging.getLogger()
 
 class SileroVad:
     """Voice activity detection with silero VAD."""
@@ -12,15 +14,18 @@ class SileroVad:
         self.threshold = threshold
         self.trigger_level = trigger_level
         self._activation = 0
+        
 
     def __call__(self, audio_bytes: Optional[bytes]) -> bool:
         if audio_bytes is None:
             # Reset
             self._activation = 0
             self.detector.reset()
+            _LOGGER.debug ("VAD reset")
             return False
-
-        if self.detector(audio_bytes) >= self.threshold:
+        value = self.detector(audio_bytes)
+        # _LOGGER.debug (value)
+        if value >= self.threshold:
             # Speech detected
             self._activation += 1
             if self._activation >= self.trigger_level:

@@ -316,10 +316,7 @@ class SatelliteBase:
         elif TimerFinished.is_type(event.type):
             _LOGGER.debug(event)
             await self.trigger_timer_finished(TimerFinished.from_event(event))
-        if (not(AudioChunk.is_type(event.type))):
-            _LOGGER.debug(event)
-        else:
-            _LOGGER.debug('received audio chunk')
+
         # Forward everything except audio/ping/pong to event service
         if forward_event:
             await self.forward_event(event)
@@ -1046,7 +1043,6 @@ class VadStreamingSatellite(SatelliteBase):
 
         super().__init__(settings)
         self.is_streaming = False
-        self.is_streaming_vad = False
         self.vad_timeout_check_start = None
         self.vad = SileroVad(
             threshold=settings.vad.threshold, trigger_level=settings.vad.trigger_level
@@ -1068,9 +1064,6 @@ class VadStreamingSatellite(SatelliteBase):
             _LOGGER.warning("Local wake word detection is enabled but will not be used")
 
         self._is_paused = False
-
-        self._wake_info: Optional[Info] = None
-        self._wake_info_ready = asyncio.Event()
         self._prevent_restart: float = None
 
     async def event_from_server(self, event: Event) -> None:
@@ -1125,7 +1118,7 @@ class VadStreamingSatellite(SatelliteBase):
             self.stt_audio_writer.write(audio_bytes)
 
         if (
-            self.is_streaming_vad
+            self.is_streaming
             and (self.timeout_seconds is not None)
             and (time.monotonic() >= self.timeout_seconds)
         ):
@@ -1152,7 +1145,6 @@ class VadStreamingSatellite(SatelliteBase):
             if not is_vad_triggered:
                 if (self.vad_timeout_check_start is None or self.vad_timeout_check_start+3 < time.monotonic()):
                     # Time out during wake word recognition
-                    self.is_streaming_vad = False
                     self.is_streaming = False
                     self.timeout_seconds = None
 
@@ -1171,7 +1163,7 @@ class VadStreamingSatellite(SatelliteBase):
                 self.timeout_seconds = time.monotonic() + self.settings.vad.wake_word_timeout
                 self.vad_timeout_check_start = None
 
-        if not self.is_streaming_vad:
+        if not self.is_streaming:
             # Check VAD
             if audio_bytes is None:
                 if chunk is None:
@@ -1190,12 +1182,16 @@ class VadStreamingSatellite(SatelliteBase):
 
             if not is_vad_triggered:
                 return
+            if (self._prevent_restart is not None and self._prevent_restart > time.monotonic()):
+                _LOGGER.debug("Prevent restart")
+                return
 
             # Speech detected
-            self.is_streaming_vad = True
+            self.prevent_restart = time.monotonic() + 5.0
+            self.is_streaming = True
             _LOGGER.info("Streaming audio")
-            # await self._send_run_pipeline()
-            # await self.trigger_streaming_start()
+            await self._send_run_pipeline()
+            await self.trigger_streaming_start()
 
             if self.settings.vad.wake_word_timeout is not None:
                 # Set future time when we'll stop streaming if the wake word
@@ -1214,7 +1210,7 @@ class VadStreamingSatellite(SatelliteBase):
                 if chunk is None:
                     chunk = AudioChunk.from_event(event)
 
-                await self.event_to_wake(
+                await self.event_to_server(
                     AudioChunk(
                         rate=chunk.rate,
                         width=chunk.width,
@@ -1228,8 +1224,6 @@ class VadStreamingSatellite(SatelliteBase):
         if self.is_streaming:
             # Forward to server
             await self.event_to_server(event)
-        elif self.is_streaming_vad:
-            await self.event_to_wake(event)
 
     def _reset_vad(self):
         """Reset state of VAD."""
@@ -1239,73 +1233,6 @@ class VadStreamingSatellite(SatelliteBase):
             # Clear buffer
             self.vad_buffer.put(bytes(self.vad_buffer.maxlen))
         self.vad_timeout_check_start = None
-
-    async def update_info(self, info: Info) -> None:
-        self._wake_info = None
-        self._wake_info_ready.clear()
-        await self.event_to_wake(Describe().event())
-
-        try:
-            await asyncio.wait_for(
-                self._wake_info_ready.wait(), timeout=_WAKE_INFO_TIMEOUT
-            )
-
-            if self._wake_info is not None:
-                # Update wake info only
-                info.wake = self._wake_info.wake
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Failed to get info from wake service")
-
-    async def event_from_wake(self, event: Event) -> None:
-        if Info.is_type(event.type):
-            self._wake_info = Info.from_event(event)
-            self._wake_info_ready.set()
-            return
-
-        if self.is_streaming or (self.server_id is None):
-            # Not detecting or no server connected
-            return
-
-        if Detection.is_type(event.type):
-            detection = Detection.from_event(event)
-
-            # Check refractory period to avoid multiple back-to-back detections
-            refractory_timestamp = self._prevent_restart
-            if (refractory_timestamp is not None) and (
-                refractory_timestamp > time.monotonic()
-            ):
-                _LOGGER.debug("Wake word detection occurred during refractory period")
-                return
-
-            # Stop debug recording (wake)
-            if self.wake_audio_writer is not None:
-                self.wake_audio_writer.stop()
-
-            # Start debug recording (stt)
-            if self.stt_audio_writer is not None:
-                self.stt_audio_writer.start(timestamp=self._debug_recording_timestamp)
-
-            _LOGGER.debug(detection)
-
-            self.is_streaming = True
-            _LOGGER.debug("Streaming audio")
-
-            # Forward to the server
-            await self.event_to_server(event)
-
-            # Match detected wake word name with pipeline name
-            pipeline_name: Optional[str] = None
-            if self.settings.wake.names:
-                detection_name = normalize_wake_word(detection.name)
-                for wake_name in self.settings.wake.names:
-                    if normalize_wake_word(wake_name.name) == detection_name:
-                        pipeline_name = wake_name.pipeline
-                        break
-
-            await self._send_run_pipeline(pipeline_name=pipeline_name)
-            await self.forward_event(event)  # forward to event service
-            await self.trigger_detection(Detection.from_event(event))
-            await self.trigger_streaming_start()
 
 
 # -----------------------------------------------------------------------------

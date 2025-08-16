@@ -429,12 +429,12 @@ async def main() -> None:
 
     satellite: SatelliteBase
 
-    if settings.wake.enabled:
+    if settings.vad.enabled:
         # Local wake word detection
-        satellite = WakeStreamingSatellite(settings)
-    elif settings.vad.enabled:
-        # Stream after speech
         satellite = VadStreamingSatellite(settings)
+    elif settings.wake.enabled:
+        # Stream after speech
+        satellite = WakeStreamingSatellite(settings)
     else:
         # Stream all the time
         satellite = AlwaysStreamingSatellite(settings)
